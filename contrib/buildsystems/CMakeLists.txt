@@ -252,7 +252,7 @@ endif()
 add_compile_definitions(SHA256_BLK INTERNAL_QSORT RUNTIME_PREFIX)
 add_compile_definitions(NO_OPENSSL SHA1_DC SHA1DC_NO_STANDARD_INCLUDES
 			SHA1DC_INIT_SAFE_HASH_DEFAULT=0
-			SHA1DC_CUSTOM_INCLUDE_SHA1_C="cache.h"
+			SHA1DC_CUSTOM_INCLUDE_SHA1_C="git-compat-util.h"
 			SHA1DC_CUSTOM_INCLUDE_UBC_CHECK_C="git-compat-util.h" )
 list(APPEND compat_SOURCES sha1dc_git.c sha1dc/sha1.c sha1dc/ubc_check.c block-sha1/sha1.c sha256/block/sha256.c compat/qsort_s.c)
 
@@ -306,6 +306,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
 		compat/win32/syslog.c
 		compat/win32/trace2_win32_process_info.c
 		compat/win32/dirent.c
+		compat/win32/wsl.c
 		compat/nedmalloc/nedmalloc.c
 		compat/strdup.c
 		compat/win32/fscache.c)

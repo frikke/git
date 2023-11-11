@@ -1,6 +1,5 @@
 #include "git-compat-util.h"
 #include "abspath.h"
-#include "alloc.h"
 #include "config.h"
 #include "csum-file.h"
 #include "dir.h"
@@ -9,7 +8,7 @@
 #include "lockfile.h"
 #include "packfile.h"
 #include "object-file.h"
-#include "object-store.h"
+#include "object-store-ll.h"
 #include "hash-lookup.h"
 #include "midx.h"
 #include "progress.h"
@@ -70,6 +69,33 @@ static int midx_read_oid_fanout(const unsigned char *chunk_start,
 
 	if (chunk_size != 4 * 256) {
 		error(_("multi-pack-index OID fanout is of the wrong size"));
+		return 1;
+	}
+	m->num_objects = ntohl(m->chunk_oid_fanout[255]);
+	return 0;
+}
+
+static int midx_read_oid_lookup(const unsigned char *chunk_start,
+				size_t chunk_size, void *data)
+{
+	struct multi_pack_index *m = data;
+	m->chunk_oid_lookup = chunk_start;
+
+	if (chunk_size != st_mult(m->hash_len, m->num_objects)) {
+		error(_("multi-pack-index OID lookup chunk is the wrong size"));
+		return 1;
+	}
+	return 0;
+}
+
+static int midx_read_object_offsets(const unsigned char *chunk_start,
+				    size_t chunk_size, void *data)
+{
+	struct multi_pack_index *m = data;
+	m->chunk_object_offsets = chunk_start;
+
+	if (chunk_size != st_mult(m->num_objects, MIDX_CHUNK_OFFSET_WIDTH)) {
+		error(_("multi-pack-index object offset chunk is the wrong size"));
 		return 1;
 	}
 	return 0;
@@ -141,33 +167,41 @@ struct multi_pack_index *load_multi_pack_index(const char *object_dir, int local
 	cf = init_chunkfile(NULL);
 
 	if (read_table_of_contents(cf, m->data, midx_size,
-				   MIDX_HEADER_SIZE, m->num_chunks))
+				   MIDX_HEADER_SIZE, m->num_chunks,
+				   MIDX_CHUNK_ALIGNMENT))
 		goto cleanup_fail;
 
-	if (pair_chunk(cf, MIDX_CHUNKID_PACKNAMES, &m->chunk_pack_names) == CHUNK_NOT_FOUND)
-		die(_("multi-pack-index missing required pack-name chunk"));
-	if (read_chunk(cf, MIDX_CHUNKID_OIDFANOUT, midx_read_oid_fanout, m) == CHUNK_NOT_FOUND)
-		die(_("multi-pack-index missing required OID fanout chunk"));
-	if (pair_chunk(cf, MIDX_CHUNKID_OIDLOOKUP, &m->chunk_oid_lookup) == CHUNK_NOT_FOUND)
-		die(_("multi-pack-index missing required OID lookup chunk"));
-	if (pair_chunk(cf, MIDX_CHUNKID_OBJECTOFFSETS, &m->chunk_object_offsets) == CHUNK_NOT_FOUND)
-		die(_("multi-pack-index missing required object offsets chunk"));
+	if (pair_chunk(cf, MIDX_CHUNKID_PACKNAMES, &m->chunk_pack_names, &m->chunk_pack_names_len))
+		die(_("multi-pack-index required pack-name chunk missing or corrupted"));
+	if (read_chunk(cf, MIDX_CHUNKID_OIDFANOUT, midx_read_oid_fanout, m))
+		die(_("multi-pack-index required OID fanout chunk missing or corrupted"));
+	if (read_chunk(cf, MIDX_CHUNKID_OIDLOOKUP, midx_read_oid_lookup, m))
+		die(_("multi-pack-index required OID lookup chunk missing or corrupted"));
+	if (read_chunk(cf, MIDX_CHUNKID_OBJECTOFFSETS, midx_read_object_offsets, m))
+		die(_("multi-pack-index required object offsets chunk missing or corrupted"));
 
-	pair_chunk(cf, MIDX_CHUNKID_LARGEOFFSETS, &m->chunk_large_offsets);
+	pair_chunk(cf, MIDX_CHUNKID_LARGEOFFSETS, &m->chunk_large_offsets,
+		   &m->chunk_large_offsets_len);
 
 	if (git_env_bool("GIT_TEST_MIDX_READ_RIDX", 1))
-		pair_chunk(cf, MIDX_CHUNKID_REVINDEX, &m->chunk_revindex);
-
-	m->num_objects = ntohl(m->chunk_oid_fanout[255]);
+		pair_chunk(cf, MIDX_CHUNKID_REVINDEX, &m->chunk_revindex,
+			   &m->chunk_revindex_len);
 
 	CALLOC_ARRAY(m->pack_names, m->num_packs);
 	CALLOC_ARRAY(m->packs, m->num_packs);
 
 	cur_pack_name = (const char *)m->chunk_pack_names;
 	for (i = 0; i < m->num_packs; i++) {
+		const char *end;
+		size_t avail = m->chunk_pack_names_len -
+				(cur_pack_name - (const char *)m->chunk_pack_names);
+
 		m->pack_names[i] = cur_pack_name;
 
-		cur_pack_name += strlen(cur_pack_name) + 1;
+		end = memchr(cur_pack_name, '\0', avail);
+		if (!end)
+			die(_("multi-pack-index pack-name chunk is too short"));
+		cur_pack_name = end + 1;
 
 		if (i && strcmp(m->pack_names[i], m->pack_names[i - 1]) <= 0)
 			die(_("multi-pack-index pack names out of order: '%s' before '%s'"),
@@ -254,7 +288,7 @@ struct object_id *nth_midxed_object_oid(struct object_id *oid,
 	if (n >= m->num_objects)
 		return NULL;
 
-	oidread(oid, m->chunk_oid_lookup + m->hash_len * n);
+	oidread(oid, m->chunk_oid_lookup + st_mult(m->hash_len, n));
 	return oid;
 }
 
@@ -271,6 +305,8 @@ off_t nth_midxed_offset(struct multi_pack_index *m, uint32_t pos)
 			die(_("multi-pack-index stores a 64-bit offset, but off_t is too small"));
 
 		offset32 ^= MIDX_LARGE_OFFSET_NEEDED;
+		if (offset32 >= m->chunk_large_offsets_len / sizeof(uint64_t))
+			die(_("multi-pack-index large offset out of bounds"));
 		return get_be64(m->chunk_large_offsets + sizeof(uint64_t) * offset32);
 	}
 
@@ -445,14 +481,14 @@ static int idx_or_pack_name_cmp(const void *_va, const void *_vb)
 
 struct write_midx_context {
 	struct pack_info *info;
-	uint32_t nr;
-	uint32_t alloc;
+	size_t nr;
+	size_t alloc;
 	struct multi_pack_index *m;
 	struct progress *progress;
 	unsigned pack_paths_checked;
 
 	struct pack_midx_entry *entries;
-	uint32_t entries_nr;
+	size_t entries_nr;
 
 	uint32_t *pack_perm;
 	uint32_t *pack_order;
@@ -584,12 +620,14 @@ static void fill_pack_entry(uint32_t pack_int_id,
 
 struct midx_fanout {
 	struct pack_midx_entry *entries;
-	uint32_t nr;
-	uint32_t alloc;
+	size_t nr, alloc;
 };
 
-static void midx_fanout_grow(struct midx_fanout *fanout, uint32_t nr)
+static void midx_fanout_grow(struct midx_fanout *fanout, size_t nr)
 {
+	if (nr < fanout->nr)
+		BUG("negative growth in midx_fanout_grow() (%"PRIuMAX" < %"PRIuMAX")",
+		    (uintmax_t)nr, (uintmax_t)fanout->nr);
 	ALLOC_GROW(fanout->entries, nr, fanout->alloc);
 }
 
@@ -668,17 +706,18 @@ static void midx_fanout_add_pack_fanout(struct midx_fanout *fanout,
 static struct pack_midx_entry *get_sorted_entries(struct multi_pack_index *m,
 						  struct pack_info *info,
 						  uint32_t nr_packs,
-						  uint32_t *nr_objects,
+						  size_t *nr_objects,
 						  int preferred_pack)
 {
 	uint32_t cur_fanout, cur_pack, cur_object;
-	uint32_t alloc_objects, total_objects = 0;
+	size_t alloc_objects, total_objects = 0;
 	struct midx_fanout fanout = { 0 };
 	struct pack_midx_entry *deduplicated_entries = NULL;
 	uint32_t start_pack = m ? m->num_packs : 0;
 
 	for (cur_pack = start_pack; cur_pack < nr_packs; cur_pack++)
-		total_objects += info[cur_pack].p->num_objects;
+		total_objects = st_add(total_objects,
+				       info[cur_pack].p->num_objects);
 
 	/*
 	 * As we de-duplicate by fanout value, we expect the fanout
@@ -721,7 +760,8 @@ static struct pack_midx_entry *get_sorted_entries(struct multi_pack_index *m,
 						&fanout.entries[cur_object].oid))
 				continue;
 
-			ALLOC_GROW(deduplicated_entries, *nr_objects + 1, alloc_objects);
+			ALLOC_GROW(deduplicated_entries, st_add(*nr_objects, 1),
+				   alloc_objects);
 			memcpy(&deduplicated_entries[*nr_objects],
 			       &fanout.entries[cur_object],
 			       sizeof(struct pack_midx_entry));
@@ -1496,21 +1536,22 @@ static int write_midx_internal(const char *object_dir,
 	add_chunk(cf, MIDX_CHUNKID_OIDFANOUT, MIDX_CHUNK_FANOUT_SIZE,
 		  write_midx_oid_fanout);
 	add_chunk(cf, MIDX_CHUNKID_OIDLOOKUP,
-		  (size_t)ctx.entries_nr * the_hash_algo->rawsz,
+		  st_mult(ctx.entries_nr, the_hash_algo->rawsz),
 		  write_midx_oid_lookup);
 	add_chunk(cf, MIDX_CHUNKID_OBJECTOFFSETS,
-		  (size_t)ctx.entries_nr * MIDX_CHUNK_OFFSET_WIDTH,
+		  st_mult(ctx.entries_nr, MIDX_CHUNK_OFFSET_WIDTH),
 		  write_midx_object_offsets);
 
 	if (ctx.large_offsets_needed)
 		add_chunk(cf, MIDX_CHUNKID_LARGEOFFSETS,
-			(size_t)ctx.num_large_offsets * MIDX_CHUNK_LARGE_OFFSET_WIDTH,
+			st_mult(ctx.num_large_offsets,
+				MIDX_CHUNK_LARGE_OFFSET_WIDTH),
 			write_midx_large_offsets);
 
 	if (flags & (MIDX_WRITE_REV_INDEX | MIDX_WRITE_BITMAP)) {
 		ctx.pack_order = midx_pack_order(&ctx);
 		add_chunk(cf, MIDX_CHUNKID_REVINDEX,
-			  ctx.entries_nr * sizeof(uint32_t),
+			  st_mult(ctx.entries_nr, sizeof(uint32_t)),
 			  write_midx_revindex);
 	}
 
@@ -1988,8 +2029,8 @@ static int fill_included_packs_batch(struct repository *r,
 		if (open_pack_index(p) || !p->num_objects)
 			continue;
 
-		expected_size = (size_t)(p->pack_size
-					 * pack_info[i].referenced_objects);
+		expected_size = st_mult(p->pack_size,
+					pack_info[i].referenced_objects);
 		expected_size /= p->num_objects;
 
 		if (expected_size >= batch_size)

@@ -1,15 +1,15 @@
 #include "git-compat-util.h"
 #include "abspath.h"
-#include "alloc.h"
 #include "config.h"
 #include "convert.h"
 #include "environment.h"
 #include "gettext.h"
 #include "hex.h"
+#include "path.h"
 #include "pretty.h"
 #include "setup.h"
 #include "refs.h"
-#include "object-store.h"
+#include "object-store-ll.h"
 #include "commit.h"
 #include "tree.h"
 #include "tree-walk.h"
@@ -130,7 +130,7 @@ static const struct attr_check *get_archive_attrs(struct index_state *istate,
 	static struct attr_check *check;
 	if (!check)
 		check = attr_check_initl("export-ignore", "export-subst", NULL);
-	git_check_attr(istate, NULL, path, check);
+	git_check_attr(istate, path, check);
 	return check;
 }
 

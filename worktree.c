@@ -1,8 +1,8 @@
 #include "git-compat-util.h"
 #include "abspath.h"
-#include "alloc.h"
 #include "environment.h"
 #include "gettext.h"
+#include "path.h"
 #include "repository.h"
 #include "refs.h"
 #include "setup.h"
@@ -11,7 +11,6 @@
 #include "dir.h"
 #include "wt-status.h"
 #include "config.h"
-#include "wrapper.h"
 
 void free_worktrees(struct worktree **worktrees)
 {
@@ -582,8 +581,10 @@ static void repair_gitfile(struct worktree *wt,
 	strbuf_release(&dotgit);
 }
 
-static void repair_noop(int iserr, const char *path, const char *msg,
-			void *cb_data)
+static void repair_noop(int iserr UNUSED,
+			const char *path UNUSED,
+			const char *msg UNUSED,
+			void *cb_data UNUSED)
 {
 	/* nothing */
 }
@@ -806,7 +807,7 @@ int init_worktree_config(struct repository *r)
 	 * If the extension is already enabled, then we can skip the
 	 * upgrade process.
 	 */
-	if (repository_format_worktree_config)
+	if (r->repository_format_worktree_config)
 		return 0;
 	if ((res = git_config_set_gently("extensions.worktreeConfig", "true")))
 		return error(_("failed to set extensions.worktreeConfig setting"));
@@ -835,7 +836,7 @@ int init_worktree_config(struct repository *r)
 	 * Relocate that value to avoid breaking all worktrees with this
 	 * upgrade to worktree config.
 	 */
-	if (!git_configset_get_value(&cs, "core.worktree", &core_worktree)) {
+	if (!git_configset_get_value(&cs, "core.worktree", &core_worktree, NULL)) {
 		if ((res = move_config_setting("core.worktree", core_worktree,
 					       common_config_file,
 					       main_worktree_file)))
@@ -846,7 +847,7 @@ int init_worktree_config(struct repository *r)
 	 * Ensure that we use worktree config for the remaining lifetime
 	 * of the current process.
 	 */
-	repository_format_worktree_config = 1;
+	r->repository_format_worktree_config = 1;
 
 cleanup:
 	git_configset_clear(&cs);

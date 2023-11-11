@@ -80,6 +80,7 @@ static struct {
 	[ADVICE_UPDATE_SPARSE_PATH]			= { "updateSparsePath", 1 },
 	[ADVICE_USE_CORE_FSMONITOR_CONFIG]		= { "useCoreFSMonitorConfig", 1 },
 	[ADVICE_WAITING_FOR_EDITOR]			= { "waitingForEditor", 1 },
+	[ADVICE_WORKTREE_ADD_ORPHAN]			= { "worktreeAddOrphan", 1 },
 };
 
 static const char turn_off_instructions[] =
@@ -192,9 +193,10 @@ int error_resolve_conflict(const char *me)
 		error(_("Pulling is not possible because you have unmerged files."));
 	else if (!strcmp(me, "revert"))
 		error(_("Reverting is not possible because you have unmerged files."));
+	else if (!strcmp(me, "rebase"))
+		error(_("Rebasing is not possible because you have unmerged files."));
 	else
-		error(_("It is not possible to %s because you have unmerged files."),
-			me);
+		BUG("Unhandled conflict reason '%s'", me);
 
 	if (advice_enabled(ADVICE_RESOLVE_CONFLICT))
 		/*

@@ -1,16 +1,18 @@
-#include "cache.h"
+#include "git-compat-util.h"
 #include "abspath.h"
-#include "config.h"
+#include "parse.h"
 #include "dir.h"
 #include "environment.h"
 #include "gettext.h"
 #include "pathspec.h"
 #include "attr.h"
+#include "read-cache.h"
 #include "repository.h"
 #include "setup.h"
 #include "strvec.h"
 #include "symlinks.h"
 #include "quote.h"
+#include "wildmatch.h"
 
 /*
  * Finds which of the given pathspecs match items in the index.
@@ -465,7 +467,12 @@ static void init_pathspec_item(struct pathspec_item *item, unsigned flags,
 		match = prefix_path_gently(prefix, prefixlen,
 					   &prefixlen, copyfrom);
 		if (!match) {
-			const char *hint_path = get_git_work_tree();
+			const char *hint_path;
+
+			if (!have_git_dir())
+				die(_("'%s' is outside the directory tree"),
+				    copyfrom);
+			hint_path = get_git_work_tree();
 			if (!hint_path)
 				hint_path = get_git_dir();
 			die(_("%s: '%s' is outside repository at '%s'"), elt,
@@ -531,24 +538,29 @@ static int pathspec_item_cmp(const void *a_, const void *b_)
 	return strcmp(a->match, b->match);
 }
 
-static void NORETURN unsupported_magic(const char *pattern,
-				       unsigned magic)
+void pathspec_magic_names(unsigned magic, struct strbuf *out)
 {
-	struct strbuf sb = STRBUF_INIT;
 	int i;
 	for (i = 0; i < ARRAY_SIZE(pathspec_magic); i++) {
 		const struct pathspec_magic *m = pathspec_magic + i;
 		if (!(magic & m->bit))
 			continue;
-		if (sb.len)
-			strbuf_addstr(&sb, ", ");
+		if (out->len)
+			strbuf_addstr(out, ", ");
 
 		if (m->mnemonic)
-			strbuf_addf(&sb, _("'%s' (mnemonic: '%c')"),
+			strbuf_addf(out, _("'%s' (mnemonic: '%c')"),
 				    m->name, m->mnemonic);
 		else
-			strbuf_addf(&sb, "'%s'", m->name);
+			strbuf_addf(out, "'%s'", m->name);
 	}
+}
+
+static void NORETURN unsupported_magic(const char *pattern,
+				       unsigned magic)
+{
+	struct strbuf sb = STRBUF_INIT;
+	pathspec_magic_names(magic, &sb);
 	/*
 	 * We may want to substitute "this command" with a command
 	 * name. E.g. when "git add -p" or "git add -i" dies when running
@@ -736,7 +748,7 @@ int match_pathspec_attrs(struct index_state *istate,
 	if (name[namelen])
 		name = to_free = xmemdupz(name, namelen);
 
-	git_check_attr(istate, NULL, name, item->attr_check);
+	git_check_attr(istate, name, item->attr_check);
 
 	free(to_free);
 

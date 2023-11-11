@@ -1,4 +1,4 @@
-#include "cache.h"
+#include "git-compat-util.h"
 #include "advice.h"
 #include "wt-status.h"
 #include "object.h"
@@ -7,8 +7,10 @@
 #include "diff.h"
 #include "environment.h"
 #include "gettext.h"
+#include "hash.h"
 #include "hex.h"
 #include "object-name.h"
+#include "path.h"
 #include "revision.h"
 #include "diffcore.h"
 #include "quote.h"
@@ -18,6 +20,7 @@
 #include "refs.h"
 #include "submodule.h"
 #include "column.h"
+#include "read-cache.h"
 #include "setup.h"
 #include "strbuf.h"
 #include "trace.h"
@@ -672,7 +675,7 @@ static void wt_status_collect_changes_index(struct wt_status *s)
 	rev.diffopt.flags.recursive = 1;
 
 	copy_pathspec(&rev.prune_data, &s->pathspec);
-	run_diff_index(&rev, 1);
+	run_diff_index(&rev, DIFF_INDEX_CACHED);
 	release_revisions(&rev);
 }
 
@@ -736,7 +739,7 @@ static void wt_status_collect_changes_initial(struct wt_status *s)
 			ps.max_depth = -1;
 
 			strbuf_add(&base, ce->name, ce->ce_namelen);
-			read_tree_at(istate->repo, tree, &base, &ps,
+			read_tree_at(istate->repo, tree, &base, 0, &ps,
 				     add_file_to_list, s);
 			continue;
 		}
@@ -1024,7 +1027,7 @@ static void wt_longstatus_print_submodule_summary(struct wt_status *s, int uncom
 	if (s->display_comment_prefix) {
 		size_t len;
 		summary_content = strbuf_detach(&summary, &len);
-		strbuf_add_commented_lines(&summary, summary_content, len);
+		strbuf_add_commented_lines(&summary, summary_content, len, comment_line_char);
 		free(summary_content);
 	}
 
@@ -1106,8 +1109,8 @@ void wt_status_append_cut_line(struct strbuf *buf)
 {
 	const char *explanation = _("Do not modify or remove the line above.\nEverything below it will be ignored.");
 
-	strbuf_commented_addf(buf, "%s", cut_line);
-	strbuf_add_commented_lines(buf, explanation, strlen(explanation));
+	strbuf_commented_addf(buf, comment_line_char, "%s", cut_line);
+	strbuf_add_commented_lines(buf, explanation, strlen(explanation), comment_line_char);
 }
 
 void wt_status_add_cut_line(FILE *fp)
@@ -1160,7 +1163,7 @@ static void wt_longstatus_print_verbose(struct wt_status *s)
 		rev.diffopt.a_prefix = "c/";
 		rev.diffopt.b_prefix = "i/";
 	} /* else use prefix as per user config */
-	run_diff_index(&rev, 1);
+	run_diff_index(&rev, DIFF_INDEX_CACHED);
 	if (s->verbose > 1 &&
 	    wt_status_check_worktree_changes(s, &dirty_submodules)) {
 		status_printf_ln(s, c,
@@ -1190,7 +1193,8 @@ static void wt_longstatus_print_tracking(struct wt_status *s)
 
 	t_begin = getnanotime();
 
-	if (!format_tracking_info(branch, &sb, s->ahead_behind_flags))
+	if (!format_tracking_info(branch, &sb, s->ahead_behind_flags,
+				  !s->commit_template))
 		return;
 
 	if (advice_enabled(ADVICE_STATUS_AHEAD_BEHIND_WARNING) &&
@@ -1797,10 +1801,10 @@ void wt_status_get_state(struct repository *r,
 		oidcpy(&state->revert_head_oid, &oid);
 	}
 	if (!sequencer_get_last_command(r, &action)) {
-		if (action == REPLAY_PICK) {
+		if (action == REPLAY_PICK && !state->cherry_pick_in_progress) {
 			state->cherry_pick_in_progress = 1;
 			oidcpy(&state->cherry_pick_head_oid, null_oid());
-		} else {
+		} else if (action == REPLAY_REVERT && !state->revert_in_progress) {
 			state->revert_in_progress = 1;
 			oidcpy(&state->revert_head_oid, null_oid());
 		}
@@ -2583,8 +2587,8 @@ int has_unstaged_changes(struct repository *r, int ignore_submodules)
 	}
 	rev_info.diffopt.flags.quick = 1;
 	diff_setup_done(&rev_info.diffopt);
-	result = run_diff_files(&rev_info, 0);
-	result = diff_result_code(&rev_info.diffopt, result);
+	run_diff_files(&rev_info, 0);
+	result = diff_result_code(&rev_info.diffopt);
 	release_revisions(&rev_info);
 	return result;
 }
@@ -2617,8 +2621,8 @@ int has_uncommitted_changes(struct repository *r,
 	}
 
 	diff_setup_done(&rev_info.diffopt);
-	result = run_diff_index(&rev_info, 1);
-	result = diff_result_code(&rev_info.diffopt, result);
+	run_diff_index(&rev_info, DIFF_INDEX_CACHED);
+	result = diff_result_code(&rev_info.diffopt);
 	release_revisions(&rev_info);
 	return result;
 }
@@ -2658,8 +2662,12 @@ int require_clean_work_tree(struct repository *r,
 	}
 
 	if (err) {
-		if (hint)
+		if (hint) {
+			if (!*hint)
+				BUG("empty hint passed to require_clean_work_tree();"
+				    " use NULL instead");
 			error("%s", hint);
+		}
 		if (!gently)
 			exit(128);
 	}

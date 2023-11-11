@@ -12,11 +12,11 @@ typedef _sigset_t sigset_t;
 #endif
 
 extern int core_fscache;
-
-struct repository;
 int are_long_paths_enabled(void);
 
-int mingw_core_config(const char *var, const char *value, void *cb);
+struct config_context;
+int mingw_core_config(const char *var, const char *value,
+		      const struct config_context *ctx, void *cb);
 #define platform_core_config mingw_core_config
 
 /*
@@ -175,6 +175,9 @@ pid_t waitpid(pid_t pid, int *status, int options);
 
 #define kill mingw_kill
 int mingw_kill(pid_t pid, int sig);
+
+#define locate_in_PATH mingw_locate_in_PATH
+char *mingw_locate_in_PATH(const char *cmd);
 
 #ifndef NO_OPENSSL
 #include <openssl/ssl.h>
