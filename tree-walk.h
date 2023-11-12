@@ -6,8 +6,6 @@
 struct index_state;
 struct repository;
 
-#define MAX_TRAVERSE_TREES 8
-
 /**
  * The tree walking API is used to traverse and inspect trees.
  */
@@ -224,7 +222,7 @@ enum interesting {
 
 enum interesting tree_entry_interesting(struct index_state *istate,
 					const struct name_entry *,
-					struct strbuf *, int,
+					struct strbuf *,
 					const struct pathspec *ps);
 
 #endif

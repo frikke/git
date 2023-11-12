@@ -1,7 +1,7 @@
 #include "git-compat-util.h"
 #include "config.h"
 #include "gettext.h"
-#include "hex.h"
+#include "hex-ll.h"
 #include "utf8.h"
 #include "strbuf.h"
 #include "mailinfo.h"
@@ -1241,12 +1241,13 @@ int mailinfo_parse_quoted_cr_action(const char *actionstr, int *action)
 	return 0;
 }
 
-static int git_mailinfo_config(const char *var, const char *value, void *mi_)
+static int git_mailinfo_config(const char *var, const char *value,
+			       const struct config_context *ctx, void *mi_)
 {
 	struct mailinfo *mi = mi_;
 
 	if (!starts_with(var, "mailinfo."))
-		return git_default_config(var, value, NULL);
+		return git_default_config(var, value, ctx, NULL);
 	if (!strcmp(var, "mailinfo.scissors")) {
 		mi->use_scissors = git_config_bool(var, value);
 		return 0;

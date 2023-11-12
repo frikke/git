@@ -1,5 +1,4 @@
 #include "builtin.h"
-#include "cache.h"
 #include "copy.h"
 #include "environment.h"
 #include "gettext.h"
@@ -12,10 +11,10 @@
 #include "strvec.h"
 #include "run-command.h"
 #include "oid-array.h"
+#include "path.h"
 #include "prompt.h"
 #include "quote.h"
 #include "revision.h"
-#include "wrapper.h"
 
 static GIT_PATH_FUNC(git_path_bisect_terms, "BISECT_TERMS")
 static GIT_PATH_FUNC(git_path_bisect_expected_rev, "BISECT_EXPECTED_REV")
@@ -27,7 +26,7 @@ static GIT_PATH_FUNC(git_path_bisect_first_parent, "BISECT_FIRST_PARENT")
 static GIT_PATH_FUNC(git_path_bisect_run, "BISECT_RUN")
 
 #define BUILTIN_GIT_BISECT_START_USAGE \
-	N_("git bisect start [--term-{new,bad}=<term> --term-{old,good}=<term>]" \
+	N_("git bisect start [--term-(new|bad)=<term> --term-(old|good)=<term>]" \
 	   "    [--no-checkout] [--first-parent] [<bad> [<good>...]] [--]" \
 	   "    [<pathspec>...]")
 #define BUILTIN_GIT_BISECT_STATE_USAGE \
@@ -47,7 +46,7 @@ static GIT_PATH_FUNC(git_path_bisect_run, "BISECT_RUN")
 #define BUILTIN_GIT_BISECT_LOG_USAGE \
 	"git bisect log"
 #define BUILTIN_GIT_BISECT_RUN_USAGE \
-	N_("git bisect run <cmd>...")
+	N_("git bisect run <cmd> [<arg>...]")
 
 static const char * const git_bisect_usage[] = {
 	BUILTIN_GIT_BISECT_START_USAGE,

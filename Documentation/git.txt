@@ -96,9 +96,9 @@ foo.bar= ...`) sets `foo.bar` to the empty string which `git config
 	to avoid ambiguity with `<name>` containing one.
 +
 This is useful for cases where you want to pass transitory
-configuration options to git, but are doing so on OS's where
-other processes might be able to read your cmdline
-(e.g. `/proc/self/cmdline`), but not your environ
+configuration options to git, but are doing so on operating systems
+where other processes might be able to read your command line
+(e.g. `/proc/self/cmdline`), but not your environment
 (e.g. `/proc/self/environ`). That behavior is the default on
 Linux, but may not be on your system.
 +
@@ -211,6 +211,11 @@ If you just want to run git as if it was started in `<path>` then use
 	list-<category> (see categories in command-list.txt),
 	nohelpers (exclude helper commands), alias and config
 	(retrieve command list from config variable completion.commands)
+
+--attr-source=<tree-ish>::
+	Read gitattributes from <tree-ish> instead of the worktree. See
+	linkgit:gitattributes[5]. This is equivalent to setting the
+	`GIT_ATTR_SOURCE` environment variable.
 
 GIT COMMANDS
 ------------
@@ -556,8 +561,8 @@ double-quotes and respecting backslash escapes. E.g., the value
 	If this variable is set, the default hash algorithm for new
 	repositories will be set to this value. This value is
 	ignored when cloning and the setting of the remote repository
-	is always used. The default is "sha1". THIS VARIABLE IS
-	EXPERIMENTAL! See `--object-format` in linkgit:git-init[1].
+	is always used. The default is "sha1".
+	See `--object-format` in linkgit:git-init[1].
 
 Git Commits
 ~~~~~~~~~~~
@@ -693,6 +698,9 @@ for further details.
 	Setting and exporting this environment variable to any value
 	tells Git not to verify the SSL certificate when fetching or
 	pushing over HTTPS.
+
+`GIT_ATTR_SOURCE`::
+	Sets the treeish that gitattributes will be read from.
 
 `GIT_ASKPASS`::
 	If this environment variable is set, then Git commands which need to
@@ -910,6 +918,16 @@ for full details.
 	be paranoid about detecting and aborting all operations). You
 	should not normally need to set this to `0`, but it may be
 	useful when trying to salvage data from a corrupted repository.
+
+`GIT_COMMIT_GRAPH_PARANOIA`::
+	When loading a commit object from the commit-graph, Git performs an
+	existence check on the object in the object database. This is done to
+	avoid issues with stale commit-graphs that contain references to
+	already-deleted commits, but comes with a performance penalty.
++
+The default is "true", which enables the aforementioned behavior.
+Setting this to "false" disables the existence check. This can lead to
+a performance improvement at the cost of consistency.
 
 `GIT_ALLOW_PROTOCOL`::
 	If set to a colon-separated list of protocols, behave as if

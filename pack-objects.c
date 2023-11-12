@@ -1,10 +1,9 @@
 #include "git-compat-util.h"
-#include "alloc.h"
 #include "object.h"
 #include "pack.h"
 #include "pack-objects.h"
 #include "packfile.h"
-#include "config.h"
+#include "parse.h"
 
 static uint32_t locate_object_entry_hash(struct packing_data *pdata,
 					 const struct object_id *oid,

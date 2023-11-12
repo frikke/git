@@ -33,13 +33,14 @@ void credential_clear(struct credential *c)
 }
 
 int credential_match(const struct credential *want,
-		     const struct credential *have)
+		     const struct credential *have, int match_password)
 {
 #define CHECK(x) (!want->x || (have->x && !strcmp(want->x, have->x)))
 	return CHECK(protocol) &&
 	       CHECK(host) &&
 	       CHECK(path) &&
-	       CHECK(username);
+	       CHECK(username) &&
+	       (!match_password || CHECK(password));
 #undef CHECK
 }
 
@@ -48,6 +49,7 @@ static int credential_from_potentially_partial_url(struct credential *c,
 						   const char *url);
 
 static int credential_config_callback(const char *var, const char *value,
+				      const struct config_context *ctx UNUSED,
 				      void *data)
 {
 	struct credential *c = data;
@@ -86,8 +88,8 @@ static int proto_is_http(const char *s)
 static void credential_describe(struct credential *c, struct strbuf *out);
 static void credential_format(struct credential *c, struct strbuf *out);
 
-static int select_all(const struct urlmatch_item *a,
-		      const struct urlmatch_item *b)
+static int select_all(const struct urlmatch_item *a UNUSED,
+		      const struct urlmatch_item *b UNUSED)
 {
 	return 0;
 }
@@ -102,7 +104,7 @@ static int match_partial_url(const char *url, void *cb)
 		warning(_("skipping credential lookup for key: credential.%s"),
 			url);
 	else
-		matches = credential_match(&want, c);
+		matches = credential_match(&want, c, 0);
 	credential_clear(&want);
 
 	return matches;

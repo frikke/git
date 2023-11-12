@@ -44,6 +44,7 @@ void prepare_repo_settings(struct repository *r)
 	/* Defaults modified by feature.* */
 	if (experimental) {
 		r->settings.fetch_negotiation_algorithm = FETCH_NEGOTIATION_SKIPPING;
+		r->settings.pack_use_bitmap_boundary_traversal = 1;
 
 		/*
 		 * Force enable the builtin FSMonitor (unless the repo
@@ -88,6 +89,10 @@ void prepare_repo_settings(struct repository *r)
 	repo_cfg_bool(r, "index.sparse", &r->settings.sparse_index, 0);
 	repo_cfg_bool(r, "index.skiphash", &r->settings.index_skip_hash, r->settings.index_skip_hash);
 	repo_cfg_bool(r, "pack.readreverseindex", &r->settings.pack_read_reverse_index, 1);
+	repo_cfg_bool(r, "pack.usebitmapboundarytraversal",
+		      &r->settings.pack_use_bitmap_boundary_traversal,
+		      r->settings.pack_use_bitmap_boundary_traversal);
+	repo_cfg_bool(r, "core.usereplacerefs", &r->settings.read_replace_refs, 1);
 
 	/*
 	 * The GIT_TEST_MULTI_PACK_INDEX variable is special in that

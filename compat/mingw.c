@@ -7,7 +7,6 @@
 #include <winioctl.h>
 #include "../strbuf.h"
 #include "../run-command.h"
-#include "../cache.h"
 #include "../abspath.h"
 #include "../alloc.h"
 #include "win32/exit-process.h"
@@ -26,6 +25,7 @@
 #include "win32/fscache.h"
 #include "../attr.h"
 #include "../string-list.h"
+#include "win32/wsl.h"
 
 #define HCAST(type, handle) ((type)(intptr_t)handle)
 
@@ -298,7 +298,8 @@ int are_long_paths_enabled(void)
 	return enabled < 0 ? fallback : enabled;
 }
 
-int mingw_core_config(const char *var, const char *value, void *cb)
+int mingw_core_config(const char *var, const char *value,
+		      const struct config_context *ctx, void *cb)
 {
 	if (!strcmp(var, "core.hidedotfiles")) {
 		if (value && !strcasecmp(value, "dotgitonly"))
@@ -810,6 +811,11 @@ int mingw_open (const char *filename, int oflags, ...)
 
 	fd = open_fn(wfilename, oflags, mode);
 
+	if ((oflags & O_CREAT) && fd >= 0 && are_wsl_compatible_mode_bits_enabled()) {
+		_mode_t wsl_mode = S_IFREG | (mode&0777);
+		set_wsl_mode_bits_by_handle((HANDLE)_get_osfhandle(fd), wsl_mode);
+	}
+
 	if (fd < 0 && (oflags & O_ACCMODE) != O_RDONLY && errno == EACCES) {
 		DWORD attrs = GetFileAttributesW(wfilename);
 		if (attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_DIRECTORY))
@@ -942,7 +948,7 @@ ssize_t mingw_write(int fd, const void *buf, size_t len)
 {
 	ssize_t result = write(fd, buf, len);
 
-	if (result < 0 && errno == EINVAL && buf) {
+	if (result < 0 && (errno == EINVAL || errno == EBADF) && buf) {
 		/* check if fd is a pipe */
 		HANDLE h = (HANDLE) _get_osfhandle(fd);
 		if (GetFileType(h) == FILE_TYPE_PIPE)
@@ -1097,6 +1103,11 @@ int mingw_lstat(const char *file_name, struct stat *buf)
 		filetime_to_timespec(&(fdata.ftLastAccessTime), &(buf->st_atim));
 		filetime_to_timespec(&(fdata.ftLastWriteTime), &(buf->st_mtim));
 		filetime_to_timespec(&(fdata.ftCreationTime), &(buf->st_ctim));
+		if (S_ISREG(buf->st_mode) &&
+		    are_wsl_compatible_mode_bits_enabled()) {
+			copy_wsl_mode_bits_from_disk(wfilename, -1,
+						     &buf->st_mode);
+		}
 		return 0;
 	}
 
@@ -1148,6 +1159,8 @@ static int get_file_info_by_handle(HANDLE hnd, struct stat *buf)
 	filetime_to_timespec(&(fdata.ftLastAccessTime), &(buf->st_atim));
 	filetime_to_timespec(&(fdata.ftLastWriteTime), &(buf->st_mtim));
 	filetime_to_timespec(&(fdata.ftCreationTime), &(buf->st_ctim));
+	if (are_wsl_compatible_mode_bits_enabled())
+	    get_wsl_mode_bits_by_handle(hnd, &buf->st_mode);
 	return 0;
 }
 
@@ -1747,6 +1760,11 @@ static char *path_lookup(const char *cmd, int exe_only)
 		prog = is_busybox_applet(cmd);
 
 	return prog;
+}
+
+char *mingw_locate_in_PATH(const char *cmd)
+{
+	return path_lookup(cmd, 0);
 }
 
 static const wchar_t *wcschrnul(const wchar_t *s, wchar_t c)
@@ -2687,7 +2705,7 @@ int mingw_accept(int sockfd1, struct sockaddr *sa, socklen_t *sz)
 #undef rename
 int mingw_rename(const char *pold, const char *pnew)
 {
-	DWORD attrs = INVALID_FILE_ATTRIBUTES, gle;
+	DWORD attrs = INVALID_FILE_ATTRIBUTES, gle, attrsold;
 	int tries = 0;
 	wchar_t wpold[MAX_LONG_PATH], wpnew[MAX_LONG_PATH];
 	if (xutftowcs_long_path(wpold, pold) < 0 ||
@@ -2700,11 +2718,24 @@ repeat:
 		return 0;
 	gle = GetLastError();
 
-	if (gle == ERROR_ACCESS_DENIED && is_inside_windows_container()) {
-		/* Fall back to copy to destination & remove source */
-		if (CopyFileW(wpold, wpnew, FALSE) && !mingw_unlink(pold))
-			return 0;
-		gle = GetLastError();
+	if (gle == ERROR_ACCESS_DENIED) {
+		if (is_inside_windows_container()) {
+			/* Fall back to copy to destination & remove source */
+			if (CopyFileW(wpold, wpnew, FALSE) && !mingw_unlink(pold))
+				return 0;
+			gle = GetLastError();
+		} else if ((attrsold = GetFileAttributesW(wpold)) & FILE_ATTRIBUTE_READONLY) {
+			/* if file is read-only, change and retry */
+			SetFileAttributesW(wpold, attrsold & ~FILE_ATTRIBUTE_READONLY);
+			if (MoveFileExW(wpold, wpnew,
+					MOVEFILE_REPLACE_EXISTING | MOVEFILE_COPY_ALLOWED)) {
+				SetFileAttributesW(wpnew, attrsold);
+				return 0;
+			}
+			gle = GetLastError();
+			/* revert attribute change on failure */
+			SetFileAttributesW(wpold, attrsold);
+		}
 	}
 
 	/* revert file attributes on failure */
@@ -3025,7 +3056,7 @@ static enum symlink_type check_symlink_attr(struct index_state *index, const cha
 	if (!check)
 		check = attr_check_initl("symlink", NULL);
 
-	git_check_attr(index, NULL, link, check);
+	git_check_attr(index, link, check);
 
 	value = check->items[0].value;
 	if (ATTR_UNSET(value))
@@ -3820,7 +3851,12 @@ int handle_long_path(wchar_t *path, int len, int max_path, int expand)
 	 * "cwd + path" doesn't due to '..' components)
 	 */
 	if (result < max_path) {
-		wcscpy(path, buf);
+		/* Be careful not to add a drive prefix if there was none */
+		if (is_wdir_sep(path[0]) &&
+		    !is_wdir_sep(buf[0]) && buf[1] == L':' && is_wdir_sep(buf[2]))
+			wcscpy(path, buf + 2);
+		else
+			wcscpy(path, buf);
 		return result;
 	}
 

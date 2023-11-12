@@ -1,5 +1,4 @@
 #include "git-compat-util.h"
-#include "alloc.h"
 #include "line-range.h"
 #include "hex.h"
 #include "tag.h"
@@ -8,6 +7,7 @@
 #include "diff.h"
 #include "commit.h"
 #include "decorate.h"
+#include "repository.h"
 #include "revision.h"
 #include "xdiff-interface.h"
 #include "strbuf.h"
@@ -1326,4 +1326,14 @@ int line_log_filter(struct rev_info *rev)
 	rev->commits = out;
 
 	return 0;
+}
+
+static void free_void_line_log_data(void *data)
+{
+	free_line_log_data(data);
+}
+
+void line_log_free(struct rev_info *rev)
+{
+	clear_decoration(&rev->line_log_data, free_void_line_log_data);
 }

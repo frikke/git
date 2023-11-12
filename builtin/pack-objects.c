@@ -1,5 +1,4 @@
 #include "builtin.h"
-#include "alloc.h"
 #include "environment.h"
 #include "gettext.h"
 #include "hex.h"
@@ -34,7 +33,7 @@
 #include "list.h"
 #include "packfile.h"
 #include "object-file.h"
-#include "object-store.h"
+#include "object-store-ll.h"
 #include "replace-object.h"
 #include "dir.h"
 #include "midx.h"
@@ -43,7 +42,6 @@
 #include "promisor-remote.h"
 #include "pack-mtimes.h"
 #include "parse-options.h"
-#include "wrapper.h"
 
 /*
  * Objects we are going to pack are collected in the `to_pack` structure.
@@ -1331,7 +1329,7 @@ static int no_try_delta(const char *path)
 
 	if (!check)
 		check = attr_check_initl("delta", NULL);
-	git_check_attr(the_repository->index, NULL, path, check);
+	git_check_attr(the_repository->index, path, check);
 	if (ATTR_FALSE(check->items[0].value))
 		return 1;
 	return 0;
@@ -3135,26 +3133,27 @@ static void prepare_pack(int window, int depth)
 	free(delta_list);
 }
 
-static int git_pack_config(const char *k, const char *v, void *cb)
+static int git_pack_config(const char *k, const char *v,
+			   const struct config_context *ctx, void *cb)
 {
 	if (!strcmp(k, "pack.window")) {
-		window = git_config_int(k, v);
+		window = git_config_int(k, v, ctx->kvi);
 		return 0;
 	}
 	if (!strcmp(k, "pack.windowmemory")) {
-		window_memory_limit = git_config_ulong(k, v);
+		window_memory_limit = git_config_ulong(k, v, ctx->kvi);
 		return 0;
 	}
 	if (!strcmp(k, "pack.depth")) {
-		depth = git_config_int(k, v);
+		depth = git_config_int(k, v, ctx->kvi);
 		return 0;
 	}
 	if (!strcmp(k, "pack.deltacachesize")) {
-		max_delta_cache_size = git_config_int(k, v);
+		max_delta_cache_size = git_config_int(k, v, ctx->kvi);
 		return 0;
 	}
 	if (!strcmp(k, "pack.deltacachelimit")) {
-		cache_max_small_delta_size = git_config_int(k, v);
+		cache_max_small_delta_size = git_config_int(k, v, ctx->kvi);
 		return 0;
 	}
 	if (!strcmp(k, "pack.writebitmaphashcache")) {
@@ -3180,7 +3179,7 @@ static int git_pack_config(const char *k, const char *v, void *cb)
 		return 0;
 	}
 	if (!strcmp(k, "pack.threads")) {
-		delta_search_threads = git_config_int(k, v);
+		delta_search_threads = git_config_int(k, v, ctx->kvi);
 		if (delta_search_threads < 0)
 			die(_("invalid number of threads specified (%d)"),
 			    delta_search_threads);
@@ -3191,7 +3190,7 @@ static int git_pack_config(const char *k, const char *v, void *cb)
 		return 0;
 	}
 	if (!strcmp(k, "pack.indexversion")) {
-		pack_idx_opts.version = git_config_int(k, v);
+		pack_idx_opts.version = git_config_int(k, v, ctx->kvi);
 		if (pack_idx_opts.version > 2)
 			die(_("bad pack.indexVersion=%"PRIu32),
 			    pack_idx_opts.version);
@@ -3227,7 +3226,7 @@ static int git_pack_config(const char *k, const char *v, void *cb)
 		ex->uri = xstrdup(pack_end + 1);
 		oidmap_put(&configured_exclusions, ex);
 	}
-	return git_default_config(k, v, cb);
+	return git_default_config(k, v, ctx, cb);
 }
 
 /* Counters for trace2 output when in --stdin-packs mode. */
@@ -3604,7 +3603,6 @@ static void read_cruft_objects(void)
 			string_list_append(&discard_packs, buf.buf + 1);
 		else
 			string_list_append(&fresh_packs, buf.buf);
-		strbuf_reset(&buf);
 	}
 
 	string_list_sort(&discard_packs);
@@ -3740,7 +3738,7 @@ static void show_object__ma_allow_promisor(struct object *obj, const char *name,
 	show_object(obj, name, data);
 }
 
-static int option_parse_missing_action(const struct option *opt,
+static int option_parse_missing_action(const struct option *opt UNUSED,
 				       const char *arg, int unset)
 {
 	assert(arg);
@@ -4118,25 +4116,40 @@ static void add_extra_kept_packs(const struct string_list *names)
 	}
 }
 
+static int option_parse_quiet(const struct option *opt, const char *arg,
+			      int unset)
+{
+	int *val = opt->value;
+
+	BUG_ON_OPT_ARG(arg);
+
+	if (!unset)
+		*val = 0;
+	else if (!*val)
+		*val = 1;
+	return 0;
+}
+
 static int option_parse_index_version(const struct option *opt,
 				      const char *arg, int unset)
 {
+	struct pack_idx_option *popts = opt->value;
 	char *c;
 	const char *val = arg;
 
 	BUG_ON_OPT_NEG(unset);
 
-	pack_idx_opts.version = strtoul(val, &c, 10);
-	if (pack_idx_opts.version > 2)
+	popts->version = strtoul(val, &c, 10);
+	if (popts->version > 2)
 		die(_("unsupported index version %s"), val);
 	if (*c == ',' && c[1])
-		pack_idx_opts.off32_limit = strtoul(c+1, &c, 0);
-	if (*c || pack_idx_opts.off32_limit & 0x80000000)
+		popts->off32_limit = strtoul(c+1, &c, 0);
+	if (*c || popts->off32_limit & 0x80000000)
 		die(_("bad index version '%s'"), val);
 	return 0;
 }
 
-static int option_parse_unpack_unreachable(const struct option *opt,
+static int option_parse_unpack_unreachable(const struct option *opt UNUSED,
 					   const char *arg, int unset)
 {
 	if (unset) {
@@ -4151,7 +4164,7 @@ static int option_parse_unpack_unreachable(const struct option *opt,
 	return 0;
 }
 
-static int option_parse_cruft_expiration(const struct option *opt,
+static int option_parse_cruft_expiration(const struct option *opt UNUSED,
 					 const char *arg, int unset)
 {
 	if (unset) {
@@ -4179,8 +4192,9 @@ int cmd_pack_objects(int argc, const char **argv, const char *prefix)
 		LIST_OBJECTS_FILTER_INIT;
 
 	struct option pack_objects_options[] = {
-		OPT_SET_INT('q', "quiet", &progress,
-			    N_("do not show progress meter"), 0),
+		OPT_CALLBACK_F('q', "quiet", &progress, NULL,
+			       N_("do not show progress meter"),
+			       PARSE_OPT_NOARG, option_parse_quiet),
 		OPT_SET_INT(0, "progress", &progress,
 			    N_("show progress meter"), 1),
 		OPT_SET_INT(0, "all-progress", &progress,
@@ -4188,7 +4202,7 @@ int cmd_pack_objects(int argc, const char **argv, const char *prefix)
 		OPT_BOOL(0, "all-progress-implied",
 			 &all_progress_implied,
 			 N_("similar to --all-progress when progress meter is shown")),
-		OPT_CALLBACK_F(0, "index-version", NULL, N_("<version>[,<offset>]"),
+		OPT_CALLBACK_F(0, "index-version", &pack_idx_opts, N_("<version>[,<offset>]"),
 		  N_("write the pack index file in the specified idx format version"),
 		  PARSE_OPT_NONEG, option_parse_index_version),
 		OPT_MAGNITUDE(0, "max-pack-size", &pack_size_limit,
@@ -4256,8 +4270,8 @@ int cmd_pack_objects(int argc, const char **argv, const char *prefix)
 				N_("ignore this pack")),
 		OPT_INTEGER(0, "compression", &pack_compression_level,
 			    N_("pack compression level")),
-		OPT_SET_INT(0, "keep-true-parents", &grafts_replace_parents,
-			    N_("do not hide commits by grafts"), 0),
+		OPT_BOOL(0, "keep-true-parents", &grafts_keep_true_parents,
+			 N_("do not hide commits by grafts")),
 		OPT_BOOL(0, "use-bitmap-index", &use_bitmap_index,
 			 N_("use a bitmap index if available to speed up counting objects")),
 		OPT_SET_INT(0, "write-bitmap-index", &write_bitmap_index,
@@ -4284,7 +4298,7 @@ int cmd_pack_objects(int argc, const char **argv, const char *prefix)
 	if (DFS_NUM_STATES > (1 << OE_DFS_STATE_BITS))
 		BUG("too many dfs states, increase OE_DFS_STATE_BITS");
 
-	read_replace_refs = 0;
+	disable_replace_refs();
 
 	sparse = git_env_bool("GIT_TEST_PACK_SPARSE", -1);
 	if (the_repository->gitdir) {
@@ -4371,7 +4385,7 @@ int cmd_pack_objects(int argc, const char **argv, const char *prefix)
 
 	if (!HAVE_THREADS && delta_search_threads != 1)
 		warning(_("no threads support, ignoring --threads"));
-	if (!pack_to_stdout && !pack_size_limit && !cruft)
+	if (!pack_to_stdout && !pack_size_limit)
 		pack_size_limit = pack_size_limit_cfg;
 	if (pack_to_stdout && pack_size_limit)
 		die(_("--max-pack-size cannot be used to build a pack for transfer"));
@@ -4388,12 +4402,8 @@ int cmd_pack_objects(int argc, const char **argv, const char *prefix)
 	if (!rev_list_all || !rev_list_reflog || !rev_list_index)
 		unpack_unreachable_expiration = 0;
 
-	if (filter_options.choice) {
-		if (!pack_to_stdout)
-			die(_("cannot use --filter without --stdout"));
-		if (stdin_packs)
-			die(_("cannot use --filter with --stdin-packs"));
-	}
+	if (stdin_packs && filter_options.choice)
+		die(_("cannot use --filter with --stdin-packs"));
 
 	if (stdin_packs && use_internal_rev_list)
 		die(_("cannot use internal rev list with --stdin-packs"));
@@ -4403,8 +4413,6 @@ int cmd_pack_objects(int argc, const char **argv, const char *prefix)
 			die(_("cannot use internal rev list with --cruft"));
 		if (stdin_packs)
 			die(_("cannot use --stdin-packs with --cruft"));
-		if (pack_size_limit)
-			die(_("cannot use --max-pack-size with --cruft"));
 	}
 
 	/*
